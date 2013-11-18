@@ -1,0 +1,618 @@
+#include"TuXiang.h"
+#include"uart.h"
+
+extern u8 ImageBuf[ROW][COL];
+extern u8 ImageBuf2[ROW][COL];
+extern u16  center[ROW];
+extern int16_t left[ROW],right[ROW];
+u8  const CCD_Valid_Line[]={    56,
+				59,62,65,68,71,74,77,80,83,86,//10	 
+				89,92,95,98,101,104,107,110,113,116,  //10
+				119,122,125,128,131,134,137,140,143,146,
+				149,152,155,158,161,164,167,170,173,176,
+				179,182,185,188,191,194,197,200,203//,206,
+				//209,212,215,218,221,224,227,230,233,236,238	//11
+			};//需采集数据的行*/
+float const center_xishu[]={
+                              0.942,0.899,0.880,0.862,0.827,
+                              0.810,0.779,0.750,0.736,0.711,
+                              0.698,0.686,0.653,0.643,0.633,
+                              0.614,0.596,0.596,0.579,0.570,
+                              0.555,0.540,0.533,0.526,0.513,
+                              0.506,0.494,0.482,0.476,0.466,
+                              0.460,0.450,0.440,0.435,0.425,
+                              0.422,0.413,0.409,0.401,0.393,
+                              0.389,0.382,0.378,0.375,0.368,
+                              0.365,0.362,0.352,0.349,0.349,
+                              0.340,0.340,0.335,0.329,0.327,
+                              0.324,0.319,0.316,0.314,0.309,
+                              0.305,0.302,0.300,0.296,0.293,
+                              0.289,0.287,0.283,0.281,0.276,
+                              0.274,0.273,0.268,0.266,0.263
+                            };
+u8 const tem[]={0,1,2,3,4,5,6};
+
+volatile u8 VSYN = 1;
+volatile u32 rowCnt = 0 ;
+volatile u32 rowValue=0;
+
+
+
+
+
+//作用： 求绝对值
+ //改变全局变量： 无
+ //输入： i（有符号的）
+ //输出： 绝对值
+uint8_t abs(int16_t i)
+ {
+	  if(i<0)
+	  return (-i);
+	  return i;
+ }
+
+float abs_f(float i)
+{
+	  if(i<0)
+	  return (-i);
+	  return i;
+ }
+//作用：求中值
+//改变全局变量： 无
+//输入： 三个无符号 输入顺序任意
+//输出： 无
+int16_t mid(int16_t a,int16_t b,int16_t c) 
+{
+
+    if(a>=b)
+	{
+    if(b>=c) return b;
+    if(c>=a) return a;
+    } 
+	else 
+	{
+    if(a>=c) return a;
+    if(c>=b) return b;    
+    }
+	return a;
+}
+//二值化数组
+#ifdef DONGTAI
+
+/*大津法二值化，浮动阈值
+函数入口：CCD采集数据数组首地址
+函数出口：二值化的浮动阈值*/
+u8 nList[256]={0}; 
+u8 otsu(u8 *pSrc)
+{
+    u8 tr=0,num=0,cnt=0;
+    u16 j=0,i=0;
+    int avfor=0,avback=0;
+    u16 cnts=0;
+    u32 total=0,total_low=0,total_high=0,g=0,max=0;
+    						//清空直方图
+    for(i=0 ; i<256 ; i++)
+        nList[i] = 0;
+     						//计算直方图
+    for(j=0 ; j<COL ; j++)
+    {
+          num = *(pSrc + j);           //获取灰度值                      
+          nList[num] += 1;          //直方图统计图像所有像素点
+          total += num;               //total计算图像的灰度值总和
+    }
+
+    for(i=0 ; i<256; i++)
+    {
+        cnt  = nList[i];                    //当前灰度值的计数数量
+        if(cnt == 0)   
+          continue;
+        total_low += (cnt * i);        //  //计算灰度值从0到当前值的像素点灰度值的总和
+        cnts += cnt;                  //计算灰度值从0到当前值的像素点数目的总和
+        if(cnts == COL)
+        {
+            break;                  //统计完所有像素点，之后的灰度值已经没有任何像素点符合，计算完毕，退出
+        }
+        total_high = total - total_low;          //背景灰度=灰度总和-前景灰度(还没有归一化)
+        avfor = (int)(total_low / cnts);             //前景归一化
+        avback = (int)(total_high / (COL - cnts));          //背景归一化  
+        g = (avback-avfor) * (avback-avfor) * (cnts*COL-cnts*cnts) / (COL*COL);        //计算方差     
+        if(max < g)
+        {
+            max = g;
+            tr = i;            //方差最大的灰度值即为大津阈值
+        }
+    }  
+    return tr;
+}
+
+//选择法排序，二值化数据使用
+u8 sort(u8 *array)
+{
+    u16 i,j,k,sum1=0,sum2=0;
+    u8 temp;
+    u8 *p;
+    p=array;
+    for(i=0;i<5;i ++)//选择法从小到大排序
+    {
+        k=i;
+        for(j=i+1;j<COL;j ++)
+            if(p[j]<p[k])
+                k=j;
+            temp=p[k];//得到最小元素 p[0] 1 2 3 4 ----------
+            p[k]=p[i];
+            p[i]=temp;
+    }
+    for(i=1;i<5;i++)
+      sum1 += p[i];
+    sum1 /= 4;
+    
+    for(i=0;i<5;i ++)//选择法从小到大排序
+    {
+        k=i;
+        for(j=i+1;j<COL;j ++)
+            if(p[j]>p[k])
+                k=j;
+            temp=p[k];//得到最大元素 p[0] 1 2 3 4
+            p[k]=p[i];
+            p[i]=temp;
+    }
+    for(i=1;i<5;i++)
+      sum2 += p[i];
+    sum2 /= 4;
+    return ((sum1+sum2)/2 + 9);
+}
+
+void erzhihua()
+{
+      u16 i,j=0,ii;
+      u8 data;
+      u8 Image[COL];
+      u8 count_sum=0; 
+      u16 sum=0;
+      for(i=0; i<ROW; i++)
+      {
+         if(i/10 == tem[count_sum])//0---0 1---1  5--
+          {
+              count_sum ++;
+              for(ii=0; ii<COL; ii ++ )
+                Image[ii]=ImageBuf[i][ii];
+              data=otsu(Image);  
+          }
+         if((data > 30) && (data <160))
+         {
+            j++;
+            sum += data;
+         }
+      }
+      data = sum / j - 5;
+      for(i=0; i<ROW; i++)
+      { 
+          for(j=0;j<COL ;j++)
+          {          
+             if(ImageBuf[i][j] >=data) //150  80 0x50
+                 ImageBuf2[i][j]=0x01;	//白
+             else
+                 ImageBuf2[i][j]=0x00;	//黑   
+          }
+          
+      }
+      for(i=0;i<2;i++)
+        for(j=0;j<COL;j++)
+        {
+             if(ImageBuf[i+1][j] >=data) //150  80 0x50
+                 ImageBuf2[i][j]=0x01;	//白
+             else
+                 ImageBuf2[i][j]=0x00;	//黑  
+        }
+}
+#else
+void erzhihua()
+{
+      u16 i,j;  
+      for(i=0; i<ROW; i++)
+      { 
+          for(j=0;j<COL ;j++)
+          {          
+             if(ImageBuf[i][j] >=75) //150  80 0x50
+                 ImageBuf2[i][j]=0x01;	//白
+             else
+                 ImageBuf2[i][j]=0x00;	//黑   
+          }
+      }
+}
+#endif
+
+//作用： 找出左右边缘,最终求的中心
+//输入： 无
+//输出： 无
+//static u8  shiziflag=0;
+void countcenter()
+{
+    int16_t i=0,j=0,ii=0,m=0; 
+    int16_t temp_r=0,temp_l=0;   
+    u8 left_flag1=0,right_flag1=0;
+    u8 leftlose[ROW],rightlose[ROW];
+    int16_t rightstart=0,rightend=0,leftstart=0,leftend=0;
+    center[0]=center[ROW-1]; 
+    u16 temp=0;
+    u8 row_start;
+    u8 flag=0;
+    for(i=0;i<ROW;i++)
+    {
+        leftlose[i]=0;
+        rightlose[i]=0;
+    }
+    for(i=ROW-1;i>ROW-4;i--)
+    {
+        for(m=(COL/2-1);m>3;m--)	            //计算hou3行左边界
+        {
+             if(  ImageBuf2[i][m]==0x01 && ImageBuf2[i][m-1]==0x00 && ImageBuf2[i][m-2]==0x00  )
+             {
+                  left[i]=m;
+                  left_flag1=1;                
+                  break;
+             }
+        }
+        if(left_flag1==0)
+        {
+          left[i]=0;
+          leftlose[i]=1;
+        }
+        left_flag1=0;
+   }
+   for(i=ROW-1;i>ROW-4;i--)
+   {
+        for(j=(COL/2-1);j<COL-2;j++)	            //计算hou3行右边界
+        {
+             if(  ImageBuf2[i][j]==0x01 && ImageBuf2[i][j+1]==0x00 && ImageBuf2[i][j+2]==0x00  )
+             {
+                  right[i]=j;
+                  right_flag1=1;
+                  break;
+             }
+        }
+        if(right_flag1==0)
+        {
+          right[i]=COL-1;
+          rightlose[i]=1;
+        }
+        right_flag1=0;
+   }
+   for(i=ROW-1;i>ROW-4;i--)
+   {
+      center[i]=(right[i] + left[i])/2;
+   }
+  
+   temp_l=mid(left[ROW-1],left[ROW-2],left[ROW-3]);
+   temp_r=mid(right[ROW-1],right[ROW-2],right[ROW-3]);
+   rightstart=temp_r-FanWei;
+   rightend=temp_r+FanWei2;
+   leftstart=temp_l-FanWei2;
+   leftend=temp_l+FanWei;
+   if(leftstart<=0) leftstart=0;
+   if(leftend>=COL) leftend=COL-1;
+   if(rightstart<=2) rightstart=2;
+   if(rightend>=COL-1) rightend=COL-1;
+   row_start = ROW - 4;
+      
+   if((rightlose[ROW-1] == 1) && (leftlose[ROW-1] == 1) && (rightlose[ROW-2] == 1) && (leftlose[ROW-2] == 1) && (rightlose[ROW-3] == 1) && (leftlose[ROW-3] == 1))//后3行都没有黑线
+   {
+      for(ii=row_start;ii>0;ii--)
+      {
+          for(m=(COL/2-1);m>3;m--)	            
+          {
+             if(  ImageBuf2[ii][m]==0x01 && ImageBuf2[ii][m-1]==0x00)
+             {
+                  left[ii]=m;
+                  left_flag1=1;
+                  leftstart= m - FanWei2;
+                  leftend=m + FanWei;
+                  if(leftstart<=0) leftstart=0;
+                  if(leftend>=COL/2) leftend=COL/2;                  
+                  break;
+             }
+          }
+          if(left_flag1==0)
+          {
+            left[ii]=0;
+            leftlose[ii]=1;
+          }
+          left_flag1=0;
+          
+        for(j=(COL/2-1);j<COL-2;j++)	            //计算hou3行右边界
+        {
+             if( ImageBuf2[ii][j]==0x01 && ImageBuf2[ii][j+1]==0x00)
+             {
+                  right[ii]=j;
+                  right_flag1=1;
+                  rightstart= j - FanWei;
+                  rightend= j + FanWei2;
+                  if(rightstart<=COL/2) rightstart=COL/2;
+                  if(rightend>=COL-1)    rightend=COL-1;
+                  break;
+             }
+        }
+        if(right_flag1==0)
+        {
+          right[ii]=COL-1;
+          rightlose[ii]=1;
+        }
+        right_flag1=0;
+       
+       center[ii] = (right[ii] + left[ii])/2;
+   
+       if((leftlose[ii] == 0) && (rightlose[ii] == 0))
+       {
+            row_start = ii;
+            break;
+       }
+     }
+   }
+ /*  right[ii] = right[ii] - COL/2;
+   uart_putchar(UART1,row_start); 
+   uart_putchar(UART1,left[ii]);
+   uart_putchar(UART1,center[ii]);
+   uart_putchar(UART1,right[ii]);
+   */
+   for(i=row_start;i>=0;i--) 
+   {    
+        left[i]=0;  
+        right[i]=0;
+            for(j=rightstart;j<rightend;j++)
+            {
+                if(ImageBuf2[i][j]==0x01 && ImageBuf2[i][j+1]==0x00)  //在范围内找到黑线
+                {
+                     right[i]=j;
+                     right_flag1=1;
+                     rightstart=j-FanWei;
+                     rightend=j+FanWei2;
+                     if(rightstart<=2) 	rightstart=2;
+                     if(rightend>=COL-1)    rightend=COL-1;
+                     break;
+                }
+            }
+            if(right_flag1==0)	 //在范围内没有找到黑线         
+                 rightlose[i]=1;             // 记录下     
+            right_flag1=0;
+           
+           //开始左边界的寻找 
+           for(j=leftend;j>leftstart;j--)
+            {
+                if(ImageBuf2[i][j]==0x01 && ImageBuf2[i][j-1]==0x00)  //在范围内找到黑线
+                {
+                     left[i]=j;
+                     left_flag1=1;
+                     leftstart=j-FanWei2;
+                     leftend=j+FanWei;
+                     if(leftstart<=0) leftstart=0;
+                     if(leftend>=COL) leftend=COL-1;
+                     break;
+                }
+            }
+            if(left_flag1==0)	 //在范围内没有找到黑线
+                leftlose[i]=1;                       
+            left_flag1=0;//左边界循环结束
+       //处理丢失黑线的情况
+       if((rightlose[i]==1) && (leftlose[i]==0))//右边线丢失
+       {
+            temp = center[i+1] - left[i+1];
+            right[i] = right[i+1]-2;
+            if(temp < 10)
+              temp = 10;
+            center[i] = left[i] + temp;
+            
+            rightstart = right[i] - FanWei;
+            rightend = right[i] + FanWei2;
+            if(rightstart <= 2) 	rightstart = 2;
+            if(rightend >= COL-1)    rightend = COL-1;
+       }
+       
+       if((rightlose[i]==0) && (leftlose[i]==1))//左边线丢失
+       {
+            temp = right[i+1] - center[i+1];
+            left[i] = left[i+1] + 2;
+            if(temp < 10)
+              temp = 10;
+            center[i] =  right[i] - temp;
+            
+            leftstart = left[i] - FanWei;
+            leftend = left[i] + FanWei + 10;
+            if(leftstart <= 0) leftstart = 0;
+            if(leftend >= COL) leftend = COL-1;
+            
+       }
+       
+       if((rightlose[i]==0) && (leftlose[i]==0))
+       {
+            center[i] = (right[i] + left[i]) / 2;
+       }
+       
+       if((rightlose[i]==1) && (leftlose[i]==1))//十字弯处理
+       {      
+            center[i] =  center[i+1];
+            
+            right[i] = right[i+1]- i / 7;
+            left[i] = left[i+1]+ i / 7;
+            if(i-1 >= 0)
+            {
+                ImageBuf2[i-1][left[i]] = 0x00;
+                ImageBuf2[i-1][left[i]-1] = 0x00;
+                ImageBuf2[i-1][right[i]] = 0x00;
+                ImageBuf2[i-1][right[i]+1] = 0x00;
+            }
+            rightstart = right[i] - FanWei; 
+            rightend = right[i] + FanWei2;
+            if(rightstart <= 2)      rightstart = 2;
+            if(rightend >= COL-1)    rightend = COL-1;
+            leftstart = left[i] - FanWei;
+            leftend = left[i] + FanWei + 10;
+            if(leftstart <= 0)       leftstart = 0;
+            if(leftend >= COL)       leftend = COL-1;
+       }    
+   }  
+   //中心线的校验
+   for(i=0;i<ROW-2;i++)
+   {  
+       center[i]=mid(center[i],center[i+1],center[i+2]);
+   }
+   for(i=ROW-5;i>=0;i--)
+   {
+       temp = center[i];
+       j=i;
+       flag = 0;
+       if( j == 0)
+          j++;
+       while(j)
+       {   
+            if(ImageBuf2[j][temp] == 0x00)
+            {
+                flag = 1;
+                break;
+            }
+            else
+                j--;
+       }
+       if((i-j < 5) && (flag == 1))
+       {
+            center[i]=1000;
+       }
+   }
+   
+   
+
+}  
+/*检测起跑线程序    使用*/
+
+void checkstart()
+{
+     int i=20,j=0;
+     int temp_l=0,temp_r=COL;
+     while(1)//判断有效行前20，直道
+     {
+        if((center[i] <= COL/2 - 20) || (center[i] >= COL/2 + 20))
+          return;
+        i++;
+        //uart_putchar(UART1,center[i]);
+        if(i >= 40)
+          break;
+     }
+     for(i=10;i<45;i++)//黑0x00
+     {
+        temp_l=0;
+        temp_r=COL;
+        
+        if((left[i] > center[i]) || (right[i] < center[i]))
+          return;
+        
+        for(j=left[i];j < center[i] ;j++)//左边黑快
+        {
+           if((ImageBuf2[i][j] == 0x01) && (ImageBuf2[i][j+1] == 0x00) )//&& (ImageBuf2[i+1][j+1] == 0x00))
+           {
+             temp_l = j + 2;
+           //  uart_putchar(UART1,0x22);uart_putchar(UART1,0x22);
+          //   uart_putchar(UART1,i);uart_putchar(UART1,left[i]);uart_putchar(UART1,temp_l);
+          //   uart_putchar(UART1,center[i]);
+          //   uart_putchar(UART1,0x22);uart_putchar(UART1,0x22);
+             break;
+           }
+        }
+        if(j == center[i])
+          continue;
+        
+        for(j=right[i];j > center[i] ;j--)//右边黑快
+        {
+            if((ImageBuf2[i][j] == 0x01) && (ImageBuf2[i][j-1] == 0x00) )//&& (ImageBuf2[i+1][j-1] == 0x00))
+            {  
+              temp_r = j - 2;
+             // uart_putchar(UART1,0x33);uart_putchar(UART1,0x33);
+            //  uart_putchar(UART1,i);
+           //   uart_putchar(UART1,temp_r);uart_putchar(UART1,right[i]);
+           //   uart_putchar(UART1,0x33);uart_putchar(UART1,0x33);
+              break;
+            }
+        }
+        if(j == center[i])
+          continue;
+        
+        for(j=temp_l;j<center[i];j++)
+        {
+            if((ImageBuf2[i][j] == 0x00) && (ImageBuf2[i][j+1] == 0x01))
+            {  
+              temp_l = j + 1;
+           //   uart_putchar(UART1,0x23);uart_putchar(UART1,0x23);
+          //    uart_putchar(UART1,i);uart_putchar(UART1,temp_l);
+          //    uart_putchar(UART1,center[i]);
+          //    uart_putchar(UART1,0x23);uart_putchar(UART1,0x23);
+              break;
+            }
+        }
+        if(j == center[i])
+          continue;
+        for(j=temp_r;j>center[i];j--)
+        {
+            if((ImageBuf2[i][j] == 0x00) && (ImageBuf2[i][j-1] == 0x01))
+            {
+              temp_r = j - 1;
+         //     uart_putchar(UART1,0x34);uart_putchar(UART1,0x34);
+          //    uart_putchar(UART1,i);
+          //    uart_putchar(UART1,temp_r); 
+         //     uart_putchar(UART1,0x34);uart_putchar(UART1,0x34);
+              break;
+            }
+        }
+        if(j == center[i])
+          continue;
+        
+  /*      for(j=temp_l;j<=temp_r;j++)
+        {
+         // if(ImageBuf2[i][j] == 0x00)//还有黑线错误，否则找到了起跑线
+         //   continue;
+          uart_putchar(UART1,ImageBuf2[i][j]);
+        } 
+        if(j == temp_r)*/
+        break;
+     } 
+    // uart_putchar(UART1,0xff);
+    // uart_putchar(UART1,0xff);
+   //  uart_putchar(UART1,i);
+     if(i >= 45)
+       return;
+     //停车程序，没有找到黑线则运行不到这里
+        
+      PORT_PCR_REG(PORTA_BASE_PTR, 16) = (0 | PORT_PCR_MUX(1) );
+      GPIO_DDR_1bit(PORTA,16,1);
+      PORT_PCR_REG(PORTA_BASE_PTR, 15) = (0 | PORT_PCR_MUX(1) );
+      GPIO_DDR_1bit(PORTA,15,1);
+      PORT_PCR_REG(PORTA_BASE_PTR, 17) = (0 | PORT_PCR_MUX(1) );
+      GPIO_DDR_1bit(PORTA,17,1);
+      
+      GPIO_SET_1bit(PORTA,15,0);                                                              
+      GPIO_SET_1bit(PORTA,16,0);
+      GPIO_SET_1bit(PORTA,17,0);
+      
+      delayms(10);
+     // DisableInterrupts;
+    //  disable_irq(PIT0 + 68);
+      FTM_PWM_Duty(FTM0, CH2,0);
+      FTM_PWM_Duty(FTM1, CH0,0);
+      
+   //   uart_putchar(UART1,0x55);
+      
+      return;
+     
+}
+//滤波函数，腐蚀滤波算法
+void nearlvbo()
+{      
+   u16 i,j;
+   for(i=ROW_MID;i<ROW-1;i++)
+     {
+        for(j=1;j<COL;j++)
+        {
+            if(ImageBuf2[i][j-1]==0x01 && ImageBuf2[i][j+1]==0x01 && ImageBuf2[i][j]==0x00)
+                    ImageBuf2[i][j]=0x01;
+            else if(ImageBuf2[i][j-1]==0x00 && ImageBuf2[i][j+1]==0x00 && ImageBuf2[i][j]==0x01)
+                    ImageBuf2[i][j]=0x00;         
+        }
+     }
+}
